@@ -220,7 +220,7 @@ const FAMILY = ["Луиза", "Филипп"];
 /* ======================================================================================== */
 const ls={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
 
-const SAVE_GRP="Копилки";
+const SAVE_GRP="Копилки", INC_GRP="Доходы";
 const SLOTS=[["b","Завтрак"],["l","Обед"],["d","Ужин"]];
 const DAYN=["Понедельник","Вторник","Среда","Четверг","Пятница","Суббота","Воскресенье"];
 const MON=["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
@@ -243,7 +243,9 @@ let month=new Date(); month=new Date(month.getFullYear(),month.getMonth(),1);
 let week=monday(new Date());
 const cat=id=>CATS.find(c=>c.id===id)||{id,name:id,grp:"Прочее",plan:0};
 const isSave=id=>cat(id).grp===SAVE_GRP;
-const groups=()=>{const g=[];CATS.forEach(c=>{if(!g.includes(c.grp))g.push(c.grp)});return g};
+const isInc=id=>cat(id).grp===INC_GRP;
+const allGroups=()=>{const g=[];CATS.forEach(c=>{if(!g.includes(c.grp))g.push(c.grp)});return g};
+const groups=()=>allGroups().filter(g=>g!==INC_GRP);
 const foodIds=()=>CATS.filter(c=>c.grp==="Питание").map(c=>c.id);
 
 /* ---------- tabs ---------- */
@@ -278,18 +280,21 @@ function renderHead(){
 }
 function stat(l,v,s,key){return `<div class="stat${key?" key":""}"><div class="lbl">${l}</div><div class="val num">${v}</div><div class="sub num">${s}</div></div>`}
 function renderOverview(){
-  const spentCats=CATS.filter(c=>c.grp!==SAVE_GRP), saveCats=CATS.filter(c=>c.grp===SAVE_GRP);
+  const spentCats=CATS.filter(c=>c.grp!==SAVE_GRP&&c.grp!==INC_GRP), saveCats=CATS.filter(c=>c.grp===SAVE_GRP), incCats=CATS.filter(c=>c.grp===INC_GRP);
   const fact=id=>TX.filter(t=>t.category_id===id).reduce((a,t)=>a+t.amount,0);
+  const incFact=incCats.reduce((a,c)=>a+fact(c.id),0);
   const planSpend=spentCats.reduce((a,c)=>a+c.plan,0), factSpend=spentCats.reduce((a,c)=>a+fact(c.id),0);
   const planSave=saveCats.reduce((a,c)=>a+c.plan,0), factSave=saveCats.reduce((a,c)=>a+fact(c.id),0);
   const mand=CATS.filter(c=>c.grp==="Обязательные");
   const mandFact=mand.reduce((a,c)=>a+fact(c.id),0), mandPlan=mand.reduce((a,c)=>a+c.plan,0);
-  const left=planSpend-factSpend;
+  const left=planSpend-factSpend, cash=incFact-factSpend-factSave;
+  const incSub=incCats.filter(c=>fact(c.id)).map(c=>`${esc(c.name.replace(/^ЗП /,""))} ${fmt(fact(c.id))}`).join(" · ")||"внеси ЗП во вкладке «Траты»";
   $("stats").innerHTML=
-    stat("Потрачено",fmt(factSpend),`из ${fmt(planSpend)} по плану`)+
-    stat("Обязательные",fmt(mandFact),`из ${fmt(mandPlan)}`)+
+    stat("Доход",fmt(incFact),incSub)+
+    stat("Потрачено",fmt(factSpend),`из ${fmt(planSpend)} по плану · обязательные ${fmt(mandFact)}`)+
     stat("Отложено",fmt(factSave),`из ${fmt(planSave)} по плану`)+
-    stat(left>=0?"Осталось по плану":"Перерасход",fmt(Math.abs(left)),"на траты до конца месяца",true);
+    (incFact?stat(cash>=0?"Свободно":"Минус",fmt(Math.abs(cash)),"доход − траты − копилки",true)
+      :stat(left>=0?"Осталось по плану":"Перерасход",fmt(Math.abs(left)),"на траты до конца месяца",true));
   $("groups").innerHTML=groups().map(g=>{const cs=CATS.filter(c=>c.grp===g);
     const gp=cs.reduce((a,c)=>a+c.plan,0),gf=cs.reduce((a,c)=>a+fact(c.id),0);
     return `<div class="grpblock"><h3 class="grp"><span>${esc(g)}</span><span class="num">${fmt(gf)} / ${fmt(gp)}</span></h3>`+
@@ -300,11 +305,13 @@ let pendingDel=null;
 function renderTx(){
   const fc=$("fCat").value,fw=$("fWho").value;
   let list=TX;if(fc)list=list.filter(t=>fc.startsWith("g:")?cat(t.category_id).grp===fc.slice(2):t.category_id===fc);if(fw)list=list.filter(t=>t.who===fw);
-  $("fSum").textContent=list.length?`${list.length} ${plural(list.length,"запись","записи","записей")} · итого ${fmt(list.reduce((a,t)=>a+t.amount,0))}`:"";
-  $("txList").innerHTML=list.length?list.map(t=>{const sv=isSave(t.category_id);
-    return `<div class="tx${sv?" save":""}"><div class="d">${ddmm(t.date)}</div>
-      <div class="w">${sv?"Копилка: ":""}${esc(cat(t.category_id).name)}<small>${esc(t.who)}${t.note?" · "+esc(t.note):""}</small></div>
-      <div class="a">${sv?"+":""}${fmt(t.amount)}</div>
+  const sumBy=f=>list.filter(f).reduce((a,t)=>a+t.amount,0);
+  const parts=[["доход",sumBy(t=>isInc(t.category_id))],["траты",sumBy(t=>!isInc(t.category_id)&&!isSave(t.category_id))],["в копилки",sumBy(t=>isSave(t.category_id))]].filter(p=>p[1]).map(p=>`${p[0]} ${fmt(p[1])}`);
+  $("fSum").textContent=list.length?`${list.length} ${plural(list.length,"запись","записи","записей")} · ${parts.join(" · ")}`:"";
+  $("txList").innerHTML=list.length?list.map(t=>{const sv=isSave(t.category_id),inc=isInc(t.category_id);
+    return `<div class="tx${sv||inc?" save":""}"><div class="d">${ddmm(t.date)}</div>
+      <div class="w">${sv?"Копилка: ":inc?"Доход: ":""}${esc(cat(t.category_id).name)}<small>${esc(t.who)}${t.note?" · "+esc(t.note):""}</small></div>
+      <div class="a">${sv||inc?"+":"−"}${fmt(t.amount)}</div>
       <button class="ghost icon x${pendingDel===t.id?" danger":""}" data-del="${t.id}" aria-label="Удалить запись">${pendingDel===t.id?"Удалить?":"×"}</button></div>`}).join("")
     :`<div class="empty">За этот месяц записей нет. Добавьте первую трату в форме выше.</div>`;
 }
@@ -362,9 +369,9 @@ function renderPlan(){
     `<p class="muted" style="margin:16px 0 0;font-size:14px">Итого план трат: <b class="num">${fmt(CATS.filter(c=>c.grp!==SAVE_GRP).reduce((a,c)=>a+c.plan,0))}</b> · в копилки: <b class="num">${fmt(CATS.filter(c=>c.grp===SAVE_GRP).reduce((a,c)=>a+c.plan,0))}</b></p>`;
 }
 function fillSelects(){
-  const opts=groups().map(g=>`<optgroup label="${esc(g)}">`+CATS.filter(c=>c.grp===g).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")+`</optgroup>`).join("");
+  const opts=allGroups().map(g=>`<optgroup label="${esc(g)}">`+CATS.filter(c=>c.grp===g).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")+`</optgroup>`).join("");
   const keep=$("txCat").value;$("txCat").innerHTML=opts;$("txCat").value=keep||"food";if(!$("txCat").value)$("txCat").selectedIndex=0;
-  const fk=$("fCat").value;$("fCat").innerHTML=`<option value="">Все категории</option>`+groups().map(g=>`<option value="g:${esc(g)}">Вся группа: ${esc(g)}</option>`).join("")+opts;$("fCat").value=fk;
+  const fk=$("fCat").value;$("fCat").innerHTML=`<option value="">Все категории</option>`+allGroups().map(g=>`<option value="g:${esc(g)}">Вся группа: ${esc(g)}</option>`).join("")+opts;$("fCat").value=fk;
   const wk=$("fWho").value;$("fWho").innerHTML=`<option value="">Оба</option>`+MEMBERS.map(m=>`<option>${esc(m.name)}</option>`).join("");$("fWho").value=wk;
 }
 function renderAll(){renderHead();renderOverview();renderTx();renderGoals();renderMenu();renderPlan()}
